@@ -1,5 +1,5 @@
-const { deployments, upgrades } = require('hardhat');
-const ethers = require('ethers');
+const { deployments, upgrades, ethers } = require('hardhat');
+// const ethers = require('ethers');
 const fs = require('fs');
 const path = require('path');
 const { log } = require('console');

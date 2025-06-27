@@ -100,6 +100,10 @@ contract NftAuction is Initializable, UUPSUpgradeable {
         auction.ended = true;
     }
 
+    receive() external payable {
+        // 接收NFT的支付
+    }
+
     function _authorizeUpgrade(
         address newImplementation
     ) internal view override {
