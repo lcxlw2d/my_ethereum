@@ -3,7 +3,9 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract NftAuction is Initializable, UUPSUpgradeable {
     struct Auction {
@@ -25,6 +27,8 @@ contract NftAuction is Initializable, UUPSUpgradeable {
         address highestBidder;
         // 最高价
         uint256 highestBid;
+        // 参与竞价的资产类型， 0x地址表示ETH，其他地址表示ERC20代币
+        address tokenAddress;
     }
     // 状态
     mapping(uint256 => Auction) public auctions;
@@ -33,8 +37,29 @@ contract NftAuction is Initializable, UUPSUpgradeable {
     // 管理员地址
     address public admin;
 
+    // AggregatorV3Interface internal priceETHFeed;
+
+    mapping(address => AggregatorV3Interface) public priceFeeds;
+
     function initialize() public initializer {
         admin = msg.sender;
+    }
+
+    function setPriceFeed(address tokenAddress, address _priceFeed) public {
+        priceFeeds[tokenAddress] = AggregatorV3Interface(_priceFeed);
+    }
+
+    function getLatestPrice(address tokenAddress) public view returns (int) {
+        AggregatorV3Interface priceFeed = priceFeeds[tokenAddress];
+        (
+            uint80 roundID,
+            int price,
+            uint startedAt,
+            uint timeStamp,
+            uint80 answeredInRound
+        ) = priceFeed.latestRoundData();
+        // emit PriceUpdated(price);
+        return price;
     }
 
     // 创建拍卖
@@ -61,28 +86,64 @@ contract NftAuction is Initializable, UUPSUpgradeable {
             ended: false,
             highestBidder: address(0),
             highestBid: 0,
-            startTime: block.timestamp
+            startTime: block.timestamp,
+            tokenAddress: address(0)
         });
         nextAuctionId++;
     }
 
-    function placeBid(uint256 _auctionId) public payable {
+    function placeBid(
+        uint256 _auctionId,
+        uint256 _amount,
+        address _tokenAddress
+    ) public payable {
         Auction storage auction = auctions[_auctionId];
         require(
             auctions[_auctionId].ended == false &&
                 block.timestamp < (auction.startTime + auction.duration),
             "Auction has ended"
         );
+        uint256 payValue;
+        if (_tokenAddress != address(0)) {
+            // 检查是否是ERC20代币
+            payValue = _amount * uint(getLatestPrice(_tokenAddress));
+        } else {
+            // 处理ETH
+            _amount = msg.value;
+            payValue = _amount * uint(getLatestPrice(address(0)));
+        }
+        // uint erc20Value = _amount * uint(getLatestPrice(_tokenAddress));
+        uint startPriceValue = auction.startPrice *
+            uint(getLatestPrice(_tokenAddress));
+        uint highestBidValue = auction.highestBid *
+            uint(getLatestPrice(_tokenAddress));
         require(
-            msg.value > auction.highestBid && msg.value > auction.startPrice,
+            payValue >= startPriceValue && payValue > highestBidValue,
             "Bid must be higher than current highest bid"
         );
-        // 退回 previously highest bid
-        if (auction.highestBidder != address(0)) {
+        // 转移ERC20到合约
+        IERC20(_tokenAddress).transferFrom(msg.sender, address(this), _amount);
+        if (auction.highestBidder == address(0)) {
+            // 退还ETH
             payable(auction.highestBidder).transfer(auction.highestBid);
+        } else {
+            // 退还ERC20
+            IERC20(auction.highestBidder).transfer(
+                auction.highestBidder,
+                auction.highestBid
+            );
         }
+        require(
+            IERC20(_tokenAddress).transferFrom(
+                msg.sender,
+                address(this),
+                _amount
+            ),
+            "Transfer failed"
+        );
+        auction.tokenAddress = _tokenAddress;
+        auction.highestBid = _amount;
         auction.highestBidder = msg.sender;
-        auction.highestBid = msg.value;
     }
 
     // 结束拍卖
